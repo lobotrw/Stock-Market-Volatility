@@ -31,7 +31,7 @@ def main_plot(data):
     ax2.plot(df.index, df["SPY"], color=color, linewidth=1)
     ax2.tick_params(axis='y', labelcolor=color, labelsize=5)
 
-    st.pyplot(fig, use_container_width=True)
+    st.pyplot(fig, width='stretch')
 
 
 def z_score(src, length):

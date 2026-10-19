@@ -48,11 +48,15 @@ navbar_bottom  = open('components/navbar_bottom.txt').read()
 st.markdown(navbar, unsafe_allow_html=True)
 
 # Define a function to download S&P 500 data and cache it for optimized performance
+@st.cache_data(ttl=3600, show_spinner=False)
 def download_data(ticker, start, end, interval):
     data = yf.download(ticker, 
                        start    = start, 
                        end      = end,
-                       interval = interval)
+                       interval = interval,
+                       auto_adjust       = False,   # keep the "Adj Close" column
+                       multi_level_index = False,   # flat columns (yfinance >= 0.2.48)
+                       progress          = False)
     return data
 
 # Layout setup using Streamlit columns
@@ -73,7 +77,7 @@ with col3:
     st.write("---")
     
     # Number input for Z Score Length
-    z_len = st.number_input("Z Score Length", 0, 100, 40, step=1)
+    z_len = st.number_input("Z Score Length", 2, 100, 40, step=1)
     
     # Convert selected years to datetime format for data fetching
     start_year = datetime.datetime(year[0], 1, 1)
@@ -87,6 +91,16 @@ with col3:
     data = pd.DataFrame()
     data["SPY"] = spy["Adj Close"]
     data["VIX"] = vix["Close"]
+
+    # SPY and VIX are downloaded separately; keep only bars present in both, otherwise the
+    # rolling Z-score of VIX turns NaN wherever the two calendars (e.g. 5d bars) disagree
+    data = data.dropna()
+
+    if data.shape[0] < 2 * z_len + 1:   # z_score() needs two stacked rolling windows
+        st.error(f"Not enough data for {year[0]}-{year[1]} at interval {interval} "
+                 f"({data.shape[0]} bars) for a Z-score length of {z_len}. "
+                 "Widen the year range or use a shorter interval.")
+        st.stop()
 
     # Calculate Z-score based on VIX data and user-defined length
     data["Z"] = z_score(data["VIX"], z_len)
@@ -117,7 +131,7 @@ with col3:
         st.subheader("CBOE Volatility Index")
         
         # Display line chart for VIX
-        st.line_chart(data, y="VIX", color="#d1a626", height=300, use_container_width=True)
+        st.line_chart(data, y="VIX", color="#d1a626", height=300, width="stretch")
         
         # Additional text content
         st.markdown(vix_)
