@@ -4,7 +4,7 @@ import yfinance as yf
 import pandas as pd
 import datetime
 import numpy as np
-from   functions import main_plot, z_score
+from   functions import main_plot, z_score, end_date, forward_return_table
 import matplotlib.pyplot as plt
 
 # Set up the Streamlit app configuration
@@ -71,7 +71,9 @@ with col3:
     interval = st.selectbox("TimeFrame", ('1d', '5d', '1wk', '1mo', '3mo'))
     
     # Slider to select start and end years
-    year = st.slider("**Select Start & End Years:**", 2000, 2040, (2022, 2025))
+    this_year = datetime.date.today().year
+    year = st.slider("**Select Start & End Years:**", 2000, this_year, (this_year - 3, this_year),
+                     help="Both years are included in full; the end year runs up to today.")
     
     # Divider line
     st.write("---")
@@ -81,7 +83,7 @@ with col3:
     
     # Convert selected years to datetime format for data fetching
     start_year = datetime.datetime(year[0], 1, 1)
-    end_year   = datetime.datetime(year[1], 1, 1)
+    end_year   = end_date(year[1])          # exclusive end -> includes all of year[1]
 
     # Fetch data for S&P 500 (^GSPC) and VIX (^VIX)
     spy = download_data("^GSPC", start_year, end=end_year, interval=interval)
@@ -89,14 +91,14 @@ with col3:
 
     # Prepare DataFrame for data processing
     data = pd.DataFrame()
-    data["SPY"] = spy["Adj Close"]
+    data["S&P 500"] = spy["Adj Close"]
     data["VIX"] = vix["Close"]
 
-    # SPY and VIX are downloaded separately; keep only bars present in both, otherwise the
+    # S&P 500 and VIX are downloaded separately; keep only bars present in both, otherwise the
     # rolling Z-score of VIX turns NaN wherever the two calendars (e.g. 5d bars) disagree
     data = data.dropna()
 
-    if data.shape[0] < 2 * z_len + 1:   # z_score() needs two stacked rolling windows
+    if data.shape[0] < z_len + 1:   # first Z needs z_len bars, the delta needs one more
         st.error(f"Not enough data for {year[0]}-{year[1]} at interval {interval} "
                  f"({data.shape[0]} bars) for a Z-score length of {z_len}. "
                  "Widen the year range or use a shorter interval.")
@@ -113,18 +115,30 @@ with col3:
     st.write("#")
     st.write("#")
     c1, c2, c3 = st.columns([1.5, 1, 1])
-    c2.metric(label="Z-Score VIX", value=z_sc, delta=delta, delta_color="normal")
+    c2.metric(label=f"Z-Score VIX (as of {data.index[-1]:%Y-%m-%d})", value=z_sc, delta=delta,
+              delta_color="inverse")   # rising volatility shown red
 
     # Display main content in col2
     with col2:
-        # Subheader for Z-score of VIX and SPY
-        st.subheader("Z-score of VIX and SPY")
+        # Subheader for Z-score of VIX and the S&P 500
+        st.subheader("Z-score of VIX and the S&P 500")
 
         # Display main plot with data
         main_plot(data)
         
         # Display description text below main plot
         st.write(desc)
+
+        # Honest check of the "does it predict?" question on the selected data
+        horizon = 20
+        table, corr_fwd, corr_past = forward_return_table(data, horizon)
+        st.markdown(f"**Does the Z-score predict the S&P 500?** Forward returns over the next {horizon} bars by "
+                    f"VIX regime, {data.index[0]:%Y-%m-%d} – {data.index[-1]:%Y-%m-%d}. This table uses future prices "
+                    "on purpose to evaluate the indicator; the indicator itself uses only past bars.")
+        st.dataframe(table.round(2), width="stretch")
+        st.caption(f"corr(Z, next {horizon}-bar return) = {corr_fwd:+.2f} · corr(Z, previous {horizon}-bar return) = "
+                   f"{corr_past:+.2f}. A Z that correlates with the past but not the future describes what already "
+                   "happened; it is not a forecast. Overlapping windows: treat the numbers as descriptive.")
 
         # Divider and additional content
         st.markdown("***")
@@ -141,51 +155,30 @@ st.write("---")
 
 with st.expander("**About**"):
     st.write('''
-        ### Stock Market Volatility Prediction System Overview
+        ### Stock Market Volatility Regime Overview
 
         **Purpose:**
-        The Stock Market Volatility Prediction System provides valuable insights into future market movements, 
-        empowering users to make informed investment decisions without executing trades directly. 
-        It utilizes the VIX (CBOE Volatility Index) as a crucial indicator for forecasting trends within the SPY (S&P 500 ETF) market.
-
+        Shows how the VIX (CBOE Volatility Index) compares with its own recent average, as a rolling Z-score,
+        next to the S&P 500 index (^GSPC). It describes the **current volatility regime**. It is not a
+        trading signal or a forecast.
 
         **Key Concepts:**
 
-        1. **Z-Score Definition:**
-        - Z-score is a statistical measure that describes a value's relationship to the mean of a group of values. 
-            It quantifies how far a particular data point is from the mean in terms of standard deviations.
+        1. **Z-Score Definition:** (VIX − rolling mean) / rolling standard deviation over the last *Z Score Length* bars.
+           Only current and past bars are used.
 
-        2. **Interpreting VIX and Z-Score:**
-        - **Decreasing Volatility (Z < 0):** Highlighted on the chart with green shades, indicating a more stable market environment. 
-            In this scenario, the system suggests that SPY may potentially experience an upward trend.
-        ![plot](components/up_trend.png)
-        
-        - **Increasing Volatility (Z > 0):** Highlighted on the chart with red shades, signaling potential market turbulence. 
-            The system assists users in considering strategies that accommodate potential market downturns.
-             
-        3. **Investment Strategy Implications:**
-        - Users can use this information to explore investment strategies aligned with potential market improvements or downturns, based on the observed trends in VIX and Z-score dynamics.
+        2. **Interpreting the shading:**
+        - **Z < −1 (green):** VIX is well below its recent average, so the market is calm compared with recent weeks.
+        - **Z > +1 (red):** VIX is well above its recent average, so volatility is elevated. This usually happens
+          *after* the S&P 500 has already fallen.
 
-        **How It Works:**
-        - **VIX as a Leading Indicator:** The system leverages the VIX to predict trends in the SPY market. 
-            Changes in the VIX provide insights into market sentiment and volatility levels.
-        
-        - **Real-Time Analysis:** By monitoring the Z-score, users can assess the current volatility status relative to historical norms, facilitating proactive decision-making.
-
-        **Target Audience:**
-        - **Investors:** Individuals seeking insights into market volatility trends to inform their investment strategies.
-        
-        - **Financial Analysts:** Professionals analyzing market data to forecast potential market movements and adjust their recommendations accordingly.
-
-        **Conclusion:**
-        The Stock Market Volatility Prediction System enhances decision-making capabilities by offering predictive insights derived from the VIX and Z-score analysis. 
-        It equips users with valuable information to navigate market conditions effectively, aligning their investment strategies with anticipated market improvements or downturns.
+        3. **What the data shows:** On S&P 500 history since 2000, forward returns after high-Z days were **not**
+           lower than after low-Z days (they were slightly higher), and the Z-score correlates strongly with
+           *past* returns but hardly with *future* ones. See the table under the chart for the period you selected.
             ''')
 
 st.markdown("""
-    Stock Volatility Web Application is not a financial advisor
-
-    Copyright 2023 Snowflake Inc. All rights reserved.
+    Stock Volatility Web Application is not financial advice.
     
     \nAuthor @VanHe1sing\n X: https://x.com/Van_He1sing\n TradingView: https://www.tradingview.com/u/VanHe1sing/\n Telegram: https://t.me/IvanKocherzhat
     """)

@@ -1,5 +1,6 @@
 """Smoke tests (need network: Yahoo Finance). The app must not raise for any interval or
 year range, and must show a real Z-score (not NaN) whenever it shows one."""
+import datetime
 import math
 from pathlib import Path
 
@@ -19,8 +20,11 @@ def run(interval, years, monkeypatch):
     return at
 
 
+Y = datetime.date.today().year
+
+
 @pytest.mark.parametrize("interval", ["1d", "5d", "1wk", "1mo", "3mo"])
-@pytest.mark.parametrize("years", [(2000, 2040), (2022, 2025), (2024, 2025), (2025, 2025), (2039, 2040)])
+@pytest.mark.parametrize("years", [(2000, Y), (Y - 3, Y), (Y - 1, Y), (Y, Y), (2024, 2025)])
 def test_no_exceptions_and_no_nan_metric(interval, years, monkeypatch):
     at = run(interval, years, monkeypatch)
     assert not at.exception, [e.message for e in at.exception]
@@ -28,3 +32,15 @@ def test_no_exceptions_and_no_nan_metric(interval, years, monkeypatch):
         assert not math.isnan(float(m.value))
     if not at.metric:
         assert at.error   # too little data -> explained, not crashed
+
+
+def test_default_view_reaches_today(monkeypatch):
+    """The default end year must include the latest bars (it used to stop at Dec 31 of the previous year)."""
+    monkeypatch.chdir(ROOT)
+    at = AppTest.from_file(str(ROOT / "main.py"), default_timeout=300)
+    at.run()
+    assert not at.exception
+    label = at.metric[0].label
+    as_of = datetime.date.fromisoformat(label.split("as of ")[1].rstrip(")"))
+    assert (datetime.date.today() - as_of).days <= 7
+    assert at.dataframe, "forward-return evaluation table is shown"
